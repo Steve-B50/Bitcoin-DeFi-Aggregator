@@ -100,3 +100,141 @@
   }
 )
 
+;; Protocol fee settings
+(define-data-var protocol-fee-bps uint u10)  ;; 0.1% default fee
+(define-data-var fee-recipient principal contract-owner)
+
+;; Protocol counters
+(define-data-var next-protocol-id uint u1)
+(define-data-var next-token-id uint u1)
+(define-data-var next-strategy-id uint u1)
+
+;; Contract status
+(define-data-var contract-paused bool false)
+
+;; Governance variables
+(define-data-var governance-token principal .btc-defi-gov-token)
+(define-data-var proposal-threshold uint u100000000) ;; Minimum tokens needed to submit proposal
+
+(define-public (add-protocol (name (string-ascii 64)) (protocol-address principal) (risk-score uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (< risk-score u101) err-invalid-risk-score)
+    
+    (let ((protocol-id (var-get next-protocol-id)))
+      (map-set protocols
+        { protocol-id: protocol-id }
+        {
+          name: name,
+          address: protocol-address,
+          enabled: true,
+          risk-score: risk-score,
+          current-yield: u0,
+          liquidity: u0,
+          volume-24h: u0
+        }
+      )
+      (var-set next-protocol-id (+ protocol-id u1))
+      (ok protocol-id)
+    )
+  )
+)
+
+(define-public (toggle-protocol (protocol-id uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    
+    (let ((protocol (unwrap! (map-get? protocols { protocol-id: protocol-id }) err-protocol-not-whitelisted)))
+      (map-set protocols
+        { protocol-id: protocol-id }
+        (merge protocol { enabled: (not (get enabled protocol)) })
+      )
+      (ok (not (get enabled protocol)))
+    )
+  )
+)
+
+(define-public (add-token (name (string-ascii 64)) (symbol (string-ascii 10)) (decimals uint) (token-contract principal))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    
+    (let ((token-id (var-get next-token-id)))
+      (map-set supported-tokens
+        { token-id: token-id }
+        {
+          name: name,
+          symbol: symbol,
+          decimals: decimals,
+          token-contract: token-contract
+        }
+      )
+      (var-set next-token-id (+ token-id u1))
+      (ok token-id)
+    )
+  )
+)
+
+(define-public (set-protocol-token-support (protocol-id uint) (token-id uint) (is-supported bool))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (is-some (map-get? protocols { protocol-id: protocol-id })) err-protocol-not-whitelisted)
+    (asserts! (is-some (map-get? supported-tokens { token-id: token-id })) (err u112))
+    
+    (map-set protocol-token-support
+      { protocol-id: protocol-id, token-id: token-id }
+      { supported: is-supported }
+    )
+    (ok is-supported)
+  )
+)
+
+(define-public (set-protocol-fee (new-fee-bps uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (<= new-fee-bps u10000) (err u113))  ;; Ensure fee is not greater than 100%
+    
+    (var-set protocol-fee-bps new-fee-bps)
+    (ok new-fee-bps)
+  )
+)
+
+(define-public (set-fee-recipient (new-recipient principal))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (var-set fee-recipient new-recipient)
+    (ok new-recipient)
+  )
+)
+
+(define-public (add-yield-strategy 
+  (name (string-ascii 64)) 
+  (description (string-ascii 256)) 
+  (risk-level uint) 
+  (target-yield uint)
+  (min-deposit uint)
+  (max-deposit uint)
+  (rebalance-frequency uint)
+)
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (and (>= risk-level u1) (<= risk-level u5)) (err u114))
+    
+    (let ((strategy-id (var-get next-strategy-id)))
+      (map-set yield-strategies
+        { strategy-id: strategy-id }
+        {
+          name: name,
+          description: description,
+          risk-level: risk-level,
+          enabled: true,
+          target-yield: target-yield,
+          min-deposit: min-deposit,
+          max-deposit: max-deposit,
+          rebalance-frequency: rebalance-frequency
+        }
+      )
+      (var-set next-strategy-id (+ strategy-id u1))
+      (ok strategy-id)
+    )
+  )
+)
