@@ -238,3 +238,100 @@
     )
   )
 )
+
+
+(define-public (toggle-strategy (strategy-id uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    
+    (let ((strategy (unwrap! (map-get? yield-strategies { strategy-id: strategy-id }) (err u115))))
+      (map-set yield-strategies
+        { strategy-id: strategy-id }
+        (merge strategy { enabled: (not (get enabled strategy)) })
+      )
+      (ok (not (get enabled strategy)))
+    )
+  )
+)
+
+(define-public (update-protocol-yield (protocol-id uint) (new-yield uint))
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (asserts! (is-some (map-get? protocols { protocol-id: protocol-id })) err-protocol-not-whitelisted)
+    
+    (let ((protocol (unwrap-panic (map-get? protocols { protocol-id: protocol-id }))))
+      (map-set protocols
+        { protocol-id: protocol-id }
+        (merge protocol { current-yield: new-yield })
+      )
+      (ok new-yield)
+    )
+  )
+)
+
+(define-public (emergency-pause)
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (var-set contract-paused true)
+    (ok true)
+  )
+)
+
+(define-public (emergency-unpause)
+  (begin
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    (var-set contract-paused false)
+    (ok true)
+  )
+)
+
+;; Simulate result from a protocol
+(define-private (simulate-swap (from-token uint) (to-token uint) (amount uint) (protocol-id uint))
+  (let (
+    (protocol (unwrap-panic (map-get? protocols { protocol-id: protocol-id })))
+    (liquidity (get liquidity protocol))
+    (fee-rate (var-get protocol-fee-bps))
+  )
+    (if (< liquidity (* amount u10))
+      ;; High slippage if liquidity is low
+      (/ (* amount u95) u100)
+      ;; Lower slippage for high liquidity
+      (/ (* amount (- u10000 fee-rate)) u10000)
+    )
+  )
+)
+
+;; Find a protocol that supports the given token pair
+(define-private (find-protocol-for-pair (from-token uint) (to-token uint))
+  (if (is-some (map-get? protocols { protocol-id: u1 }))
+    (some u1)
+    none
+  )
+)
+
+;; Execute route across protocols
+(define-private (execute-route (from-token uint) (to-token uint) (amount uint) (route (list 10 uint)))
+  (let (
+    (protocol-id (unwrap! (element-at route u0) err-route-not-found))
+    (protocol (unwrap! (map-get? protocols { protocol-id: protocol-id }) err-protocol-not-whitelisted))
+  )
+    (asserts! (get enabled protocol) err-protocol-disabled)
+    (ok (simulate-swap from-token to-token amount protocol-id))
+  )
+)
+
+;; Update statistics after a swap
+(define-private (update-swap-stats (from-token uint) (to-token uint) (input-amount uint) (output-amount uint))
+  (let (
+    (protocol-id (unwrap-panic (element-at (get best-route (unwrap-panic (map-get? route-cache 
+      { from-token: from-token, to-token: to-token, amount: input-amount }))) u0)))
+    (protocol (unwrap-panic (map-get? protocols { protocol-id: protocol-id })))
+    (current-volume (get volume-24h protocol))
+  )
+    (map-set protocols
+      { protocol-id: protocol-id }
+      (merge protocol { volume-24h: (+ current-volume input-amount) })
+    )
+    true
+  )
+)
